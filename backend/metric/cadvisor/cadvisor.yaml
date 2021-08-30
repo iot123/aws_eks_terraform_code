@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cadvisor
+  namespace: cadvisor
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: cadvisor
+rules:
+  - apiGroups: ['policy']
+    resources: ['podsecuritypolicies']
+    verbs:     ['use']
+    resourceNames:
+    - cadvisor
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: cadvisor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cadvisor
+subjects:
+- kind: ServiceAccount
+  name: cadvisor
+  namespace: cadvisor
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: cadvisor
+spec:
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: RunAsAny
+  runAsUser:
+    rule: RunAsAny
+  fsGroup:
+    rule: RunAsAny
+  volumes:
+  - '*'
+  allowedHostPaths:
+  - pathPrefix: "/"
+  - pathPrefix: "/var/run"
+  - pathPrefix: "/sys"
+  - pathPrefix: "/var/lib/docker"
+  - pathPrefix: "/dev/disk"
+---
+apiVersion: apps/v1 # for Kubernetes versions before 1.9.0 use apps/v1beta2
+kind: DaemonSet
+metadata:
+  name: cadvisor
+  namespace: cadvisor
+  annotations:
+      seccomp.security.alpha.kubernetes.io/pod: 'docker/default'
+spec:
+  selector:
+    matchLabels:
+      name: cadvisor
+  template:
+    metadata:
+      labels:
+        name: cadvisor
+    spec:
+      serviceAccountName: cadvisor
+      containers:
+      - name: cadvisor
+        image: k8s.gcr.io/cadvisor:v0.30.2
+        volumeMounts:
+        - name: rootfs
+          mountPath: /rootfs
+          readOnly: true
+        - name: var-run
+          mountPath: /var/run
+          readOnly: true
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+        - name: docker
+          mountPath: /var/lib/docker
+          readOnly: true
+        - name: disk
+          mountPath: /dev/disk
+          readOnly: true
+        ports:
+          - name: http
+            containerPort: 8080
+            hostPort: 8080
+            protocol: TCP
+      hostNetwork: true
+      hostPID: true
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: rootfs
+        hostPath:
+          path: /
+      - name: var-run
+        hostPath:
+          path: /var/run
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: docker
+        hostPath:
+          path: /var/lib/docker
+      - name: disk
+        hostPath:
+          path: /dev/disk
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/scrape: 'true'
+  name: cadvisor
+  namespace: cadvisor
+  labels:
+    app: prometheus
+    component: cadvisor
+spec:
+  clusterIP: None
+  ports:
+    - name: cadvisor
+      port: 8080
+      protocol: TCP
+  selector:
+    app: prometheus
+    component: cadvisor
+  type: ClusterIP

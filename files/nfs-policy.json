@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:DeleteVolume",
+        "ec2:DescribeVolumeAttribute",
+        "ec2:DescribeVolumeStatus",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVolumesModifications",
+        "ec2:DetachVolume",
+        "ec2:ModifyVolume",
+        "ec2:ModifyVolumeAttribute",
+        "route53:*"
+      ],
+      "Effect": "Allow",
+      "Resource": "*"
+    }
+  ]
+}
+

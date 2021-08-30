@@ -1,0 +1,167 @@
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: default-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: nanoprecise
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    role: mongo-kpi-cache
+    environment: production-kpi-cache
+  name: mongo-kpi-cache
+  namespace: nanoprecise
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      role: mongo-kpi-cache
+  serviceName: mongo-kpi-cache
+  template:
+    metadata:
+      labels:
+        role: mongo-kpi-cache
+        environment: production-kpi-cache
+    spec:
+      containers:
+        - command:
+            - /bin/sh
+            - -cx
+            - >
+              if [ -f /data/db/admin-user.lock ]; then
+                echo "KUBERNETES LOG $HOSTNAME- Starting Mongo Daemon with runtime settings (clusterAuthMode)"
+                #ensure wiredTigerCacheSize is set within the size of the containers memory limit
+                mongod --wiredTigerCacheSizeGB 0.25 --replSet rs2 --bind_ip 0.0.0.0  --clusterAuthMode keyFile --keyFile /etc/secrets-volume/mongo-kpi-cachedb-keyfile --setParameter authenticationMechanisms=SCRAM-SHA-1;
+              else
+                echo "KUBERNETES LOG $HOSTNAME- Starting Mongo Daemon with setup setting (authMode)"
+                mongod --auth;
+              fi;
+          env:         
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: MONGO_USERNAME
+                  name: mongo-kpi-cache-secret
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: MONGO_AUTH_PASS
+                  name: mongo-kpi-cache-secret
+            - name: MONGODB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  key: MONGO_AUTH_DB
+                  name: mongo-kpi-cache-secret
+          image: mongo:4.4
+          imagePullPolicy: Always
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -cx
+                  - >
+                    if [ ! -f /data/db/admin-user.lock ]; then
+                      echo "KUBERNETES LOG $HOSTNAME - no Admin-user.lock file found yet"
+                      #upped this to 20 to 'ensure' mongod is accepting connections
+                      sleep 20;
+                      touch /data/db/admin-user.lock
+                      if [ "$HOSTNAME" = "mongo-kpi-cache-0" ]; then
+                        echo "KUBERNETES LOG $HOSTNAME - creating admin user ${MONGODB_USERNAME}"
+                        mongo --eval "db = db.getSiblingDB('admin'); db.createUser({ user: '${MONGODB_USERNAME}', pwd: '${MONGODB_PASSWORD}', roles: [{ role: 'root', db: 'admin' }]});" >> /data/db/config.log
+                      fi;
+                      echo "KUBERNETES LOG $HOSTNAME -shutting mongod down for final restart"
+                      mongod --shutdown;
+                    fi;
+          name: mongo-kpi-cache
+          ports:
+            - containerPort: 27017
+              protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /data/db
+              name: mongo-kpi-cache-persistent-storage
+            - name: mongo-kpi-cache-key
+              mountPath: "/etc/secrets-volume"
+              readOnly: true
+        - env:
+            - name: MONGO_SIDECAR_POD_LABELS
+              value: "role=mongo-kpi-cache,environment=production-kpi-cache"
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: MONGO_USERNAME
+                  name: mongo-kpi-cache-secret
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: MONGO_AUTH_PASS
+                  name: mongo-kpi-cache-secret
+            - name: MONGODB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  key: MONGO_AUTH_DB
+                  name: mongo-kpi-cache-secret
+          image: cvallance/mongo-k8s-sidecar
+          imagePullPolicy: Always
+          name: mongo-kpi-cache-sidecar
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      volumes:
+        - name: mongo-kpi-cache-key
+          secret:
+            defaultMode: 0400
+            secretName: mongo-kpi-cache-secret
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 10
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates:
+    - metadata:
+        annotations:
+          volume.beta.kubernetes.io/storage-class: managed-nfs-storage
+        creationTimestamp: null
+        name: mongo-kpi-cache-persistent-storage
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        dataSource: null
+        resources:
+          requests:
+            storage: 5Gi
+      status:
+        phase: Pending
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    name: mongo-kpi-cache
+  name: mongo-kpi-cache
+  namespace: nanoprecise
+spec:
+  clusterIP: None
+  ports:
+  - port: 27017
+    protocol: TCP
+    targetPort: 27017
+  selector:
+    role: mongo-kpi-cache
+  sessionAffinity: None
+  type: ClusterIP
+status:
+  loadBalancer: {}
